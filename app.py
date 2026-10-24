@@ -1,6 +1,7 @@
 import requests
 import time
 import logging
+import re
 from datetime import datetime
 from google import genai
 from google.genai import types
@@ -23,7 +24,7 @@ class WaterMeterReader:
             'Authorization': f'Bearer {config.HOME_ASSISTANT_TOKEN}',
             'Content-Type': 'application/json'
         }
-        self.model = "gemini-3-flash-preview"
+        self.model = getattr(config, 'GEMINI_MODEL', 'gemini-3-flash-preview')
         self.prompt = "Bekijk de foto van de watermeter heel zorgvuldig en vergroot waar nodig. De vier witte cijfers (wieltjes) geven het aantal kubieke meters (m³) — dat is het gehele getal vóór de komma. De vier rode wijzertjes geven de cijfers ná de komma (de decimale cijfers). Lees alle 8 cijfers exact en geef alleen de meterstand terug in één regel, zonder extra woorden of eenheid, in het format met een punt als decimaalscheiding: XXXX.YYYY (bijvoorbeeld 0123.4567). Als één of meer cijfers onleesbaar zijn of de foto onvoldoende kwaliteit heeft om de volledige acht cijfers betrouwbaar te bepalen, antwoord dan precies met: ERROR (uitroepende letters, met toelichting), tenzij het enkel over het laatste cijfer gaat, deze is minder belangrijk, dus probeer dan in te schatten wat het getal zou zijn."
 
     def is_within_active_hours(self):
@@ -91,7 +92,7 @@ class WaterMeterReader:
             logger.info("Requesting image from ESP32-CAM...")
             image_bytes = requests.get(config.ESP32_CAM_URL, timeout=15).content
             image = types.Part.from_bytes(
-            data=image_bytes, mime_type="image/jpeg"
+                data=image_bytes, mime_type="image/jpeg"
             )
             return image
         except Exception as e:
@@ -105,7 +106,13 @@ class WaterMeterReader:
                 model=self.model,
                 contents=[self.prompt, image],
             )
-            return float(response.text)
+            text = response.text.strip()
+            logger.info(f"Gemini response: {text}")
+            match = re.search(r'(\d+\.\d+)', text)
+            if match:
+                return float(match.group(1))
+            logger.warning(f"Could not parse numeric reading from Gemini response: {text}")
+            return None
             
         except Exception as e:
             logger.error(f"Error analyzing image with Gemini: {e}")
